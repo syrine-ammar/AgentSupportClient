@@ -65,16 +65,16 @@ def classify_message(state: SupportState) -> SupportState:
     
     intent = result.get("intent", "other")
     confidence = result.get("confidence", result.get("intent_confidence", 0.5))
-    entities = result.get("extracted_entities", {})
+    entities = result.get("extracted_entities",None)#, {})
     
-    # Si confiance faible, on escalade directement
-    if confidence < 0.7:
+    # Si confiance faible, on escalade directement, 
+    if intent == "other" or confidence < 0.7:
         return {
             **state,
             "intent": intent,
             "intent_confidence": confidence,
             "needs_escalation": True,
-            "escalation_reason": "low_confidence",
+            "escalation_reason": "intent_other" if intent == "other" else "low_confidence",
             "action_result": {"extracted_entities": entities},
         }
     

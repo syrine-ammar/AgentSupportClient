@@ -87,7 +87,7 @@ def build_graph():
     
     return graph.compile()
 
-app = build_graph()
+support_graph= build_graph()
 
 if __name__ == "__main__":
     test_inputs = [
@@ -101,7 +101,7 @@ if __name__ == "__main__":
     for inp in test_inputs:
         print("="*60)
         print("INPUT:", inp["message"])
-        result = app.invoke(inp)
+        result = support_graph.invoke(inp)
         print("INTENT:", result.get("intent"), "(conf:", result.get("intent_confidence"), ")")
         print("STATUS:", result.get("status"))
         print("FINAL:", result.get("final_response"))

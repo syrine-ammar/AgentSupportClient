@@ -80,5 +80,6 @@ def escalation_node(state: SupportState) -> SupportState:
         **state,
         "escalation_summary": summary,
         "status": "escalated",
+        "needs_escalation": True,
         "final_response": None  # On ne répond pas au client car on passe la main à l'humain
     }
