@@ -9,6 +9,11 @@ import re
 import requests
 import streamlit as st
 import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from backend.services.auth_utils import login, signup, load_users
+from database_mock import get_orders_by_customer, get_product
 
 BACKEND_URL = os.getenv(
     "BACKEND_URL",
@@ -345,29 +350,93 @@ if "temp_input" not in st.session_state:
     st.session_state.temp_input = None
 if "last_debug_data" not in st.session_state:
     st.session_state.last_debug_data = None
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "customer_id" not in st.session_state:
+    st.session_state.customer_id = "anonymous"
+if "customer_name" not in st.session_state:
+    st.session_state.customer_name = None
+if "force_login_required" not in st.session_state:
+    st.session_state.force_login_required = False
+if "waiting_for_approval" not in st.session_state:
+    st.session_state.waiting_for_approval = False
+if "pending_email" not in st.session_state:
+    st.session_state.pending_email = None
+if "pending_password" not in st.session_state:
+    st.session_state.pending_password = None
+if "pending_request" not in st.session_state:
+    st.session_state.pending_request = None
+if "auth_message" not in st.session_state:
+    st.session_state.auth_message = None
 
-# --- Sélection du client (simule une connexion dans le Sidebar) ---
+# --- Sidebar ---
 with st.sidebar:
     st.header("Session client")
-    customer_id = st.selectbox(
-        "Client connecté",
-        options=["CUST001", "CUST002", "CUST003"],
-        format_func=lambda cid: {
-            "CUST001": "CUST001 — Sarah Ben Ali (Gold)",
-            "CUST002": "CUST002 — Karim Trabelsi (Silver)",
-            "CUST003": "CUST003 — Lina Mansour (Bronze)",
-        }[cid],
-    )
+
+    if st.session_state.logged_in:
+        st.success(
+            f"Connecté en tant que **{st.session_state.customer_name}**\n\n"
+            f"ID : `{st.session_state.customer_id}`"
+        )
+
+        if st.button("Se déconnecter", use_container_width=True):
+            st.session_state.logged_in = False
+            st.session_state.customer_id = "anonymous"
+            st.session_state.customer_name = None
+            st.session_state.force_login_required = False
+            st.session_state.auth_message = None
+            st.session_state.waiting_for_approval = False
+            st.rerun()
+
+        # --- Order history ---
+        st.divider()
+        st.subheader("📦 Mes commandes")
+        try:
+            orders = get_orders_by_customer(st.session_state.customer_id)
+            if not orders:
+                st.info("Aucune commande trouvée.")
+            else:
+                for order in orders:
+                    # Resolve product names from product IDs
+                    product_ids = order.get('products', []) or []
+                    product_names = []
+                    for pid in product_ids:
+                        p = get_product(pid)
+                        if p:
+                            product_names.append(p.get('name'))
+                        else:
+                            product_names.append(pid)
+
+                    products_display = ", ".join(product_names) if product_names else "-"
+
+                    with st.container():
+                        st.markdown(
+                            f"""
+                            **{order.get('order_id')}**  
+                            Produit(s) : {products_display}  
+                            Coût : **{order.get('total')} €**  
+                            Date : {order.get('order_date')}
+                            """
+                        )
+                        st.divider()
+        except Exception:
+            st.warning("Impossible de charger les commandes.")
+
+    else:
+        st.info("Vous chattez actuellement en mode **anonyme**.\n\n"
+                "La connexion sera demandée uniquement si nécessaire.")
 
     st.divider()
-    show_debug = st.checkbox("Afficher le panneau debug", value=True)
+    show_debug = st.checkbox("Afficher le panneau debug", value=False)
 
-    if st.button("🔄 Réinitialiser la conversation"):
+    if st.button("🔄 Réinitialiser la conversation", use_container_width=True):
         st.session_state.messages = []
         st.session_state.last_debug_data = None
         st.session_state.temp_input = None
-        st.rerun()#rerun the script 
-
+        st.session_state.force_login_required = False
+        st.session_state.waiting_for_approval = False
+        st.session_state.pending_request = None
+        st.rerun()
 # --- En-tête de l'application ---
 st.markdown("""
 <div class="header-container">
@@ -432,8 +501,179 @@ chat_container = st.empty()
 with chat_container:
     render_chat(st.session_state.messages, show_typing=False)
 
-# --- Saisie utilisateur classique ---
-user_input = st.chat_input("Ask Aria anything...")
+
+def get_user_status(email: str):
+    users = load_users()
+    user = users.get(email)
+    return user.get("status") if user else None
+
+
+def continue_pending_request():
+    if not st.session_state.pending_request or not st.session_state.logged_in:
+        return
+
+    history_for_backend = [
+        {"role": msg["role"], "content": msg["content"]}
+        for msg in st.session_state.messages
+        if msg["role"] != "assistant" or msg["content"] != "Veuillez vous connecter ou créer un compte pour poursuivre."
+    ]
+
+    try:
+        response = requests.post(
+            f"{BACKEND_URL}/chat",
+            json={
+                "customer_id": st.session_state.customer_id,
+                "message": st.session_state.pending_request,
+                "conversation_history": history_for_backend
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        final_response = data.get("final_response", "Désolé, une erreur est survenue.")
+        st.session_state.messages.append({"role": "assistant", "content": final_response})
+        st.session_state.last_debug_data = data
+    except Exception as e:
+        st.session_state.messages.append({"role": "assistant", "content": "Erreur lors de la reprise de la conversation après validation : " + str(e)})
+
+    st.session_state.pending_request = None
+    st.session_state.waiting_for_approval = False
+    st.session_state.force_login_required = False
+    st.session_state.pending_email = None
+    st.session_state.pending_password = None
+
+
+if st.session_state.waiting_for_approval and st.session_state.pending_email:
+    current_status = get_user_status(st.session_state.pending_email)
+    if current_status == "approved":
+        login_result = login(st.session_state.pending_email, st.session_state.pending_password)
+        if login_result.get("success"):
+            st.session_state.logged_in = True
+            st.session_state.customer_id = login_result["customer_id"]
+            st.session_state.customer_name = login_result["name"]
+            continue_pending_request()
+
+
+# --- Force Login / Signup Form ---
+if st.session_state.force_login_required and not st.session_state.logged_in:
+
+    st.markdown("""
+    <div style="
+        background: rgba(15, 12, 38, 0.7);
+        border: 1px solid rgba(124, 58, 237, 0.3);
+        border-radius: 16px;
+        padding: 24px;
+        margin: 20px 0;
+        backdrop-filter: blur(12px);
+    ">
+        <h3 style="margin-top:0; color:#c4b5fd;">🔐 Connexion requise</h3>
+        <p style="color:#9ca3af; margin-bottom: 20px;">
+            Pour continuer, veuillez vous connecter ou créer un compte.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Mode selection (outside the form so it switches instantly)
+    auth_mode = st.radio(
+        "Choisissez une action :",
+        ["Se connecter", "Créer un compte"],
+        horizontal=True,
+        key="auth_mode_radio"
+    )
+
+    st.write("")  # small spacer
+
+    if auth_mode == "Se connecter":
+        with st.form("login_form_inline", clear_on_submit=False):
+            st.subheader("Se connecter")
+            auth_identifier = st.text_input("Email ou téléphone", key="login_id")
+            auth_password = st.text_input("Mot de passe", type="password", key="login_pwd")
+            
+            submitted = st.form_submit_button("Se connecter", use_container_width=True)
+            
+            if submitted:
+                result = login(auth_identifier.strip(), auth_password)
+                if result.get("success"):
+                    st.session_state.logged_in = True
+                    st.session_state.customer_id = result["customer_id"]
+                    st.session_state.customer_name = result["name"]
+                    st.session_state.force_login_required = False
+                    st.session_state.auth_message = "Connecté avec succès !"
+                    if st.session_state.pending_request:
+                        continue_pending_request()
+                    st.rerun()
+                else:
+                    st.error(result.get("message", "Erreur de connexion"))
+                    if "attente" in (result.get("message") or "").lower():
+                        st.session_state.waiting_for_approval = True
+                        st.session_state.pending_email = auth_identifier.strip()
+                        st.session_state.pending_password = auth_password
+
+    else:  # Créer un compte
+        with st.form("signup_form_inline", clear_on_submit=False):
+            st.subheader("Créer un compte")
+            auth_name = st.text_input("Nom complet", key="signup_name")
+            auth_email = st.text_input("Email", key="signup_email")
+            auth_phone = st.text_input("Téléphone", key="signup_phone")
+            auth_password = st.text_input("Mot de passe", type="password", key="signup_pwd")
+            
+            submitted = st.form_submit_button("Créer mon compte", use_container_width=True)
+            
+            if submitted:
+                # Validate inputs
+                errors = []
+                name_val = (auth_name or "").strip()
+                email_val = (auth_email or "").strip()
+                phone_val = (auth_phone or "").strip()
+                pwd_val = auth_password or ""
+
+                if not name_val:
+                    errors.append("Le nom est requis.")
+
+                # Gmail-only: must have text before @gmail.com
+                if not email_val or not email_val.lower().endswith("@gmail.com") or email_val.count("@") != 1 or email_val.split("@")[0] == "":
+                    errors.append("Email Gmail valide requis (ex: utilisateur@gmail.com).")
+
+                # Phone: digits only and expected length 10
+                if not phone_val.isdigit() or len(phone_val) != 8:
+                    errors.append("Téléphone invalide : 8 chiffres requis, seulement des chiffres autorisés.")
+
+                # Password length
+                if len(pwd_val) < 8:
+                    errors.append("Le mot de passe doit contenir au moins 8 caractères.")
+
+                if errors:
+                    st.error("\n".join(errors))
+                else:
+                    result = signup(
+                        email_val,
+                        pwd_val,
+                        name_val,
+                        phone_val
+                    )
+                    if result.get("success"):
+                        st.session_state.auth_message = (
+                            "✅ Compte créé avec succès !\n\n"
+                            "Votre compte est en attente de validation par un administrateur. "
+                            "Vous pourrez vous connecter une fois approuvé."
+                        )
+                        st.session_state.waiting_for_approval = True
+                        st.session_state.pending_email = email_val
+                        st.session_state.pending_password = pwd_val
+                        st.success(st.session_state.auth_message)
+                    else:
+                        st.error(result.get("message", "Erreur lors de la création du compte"))
+
+    # Waiting for approval message
+    if st.session_state.waiting_for_approval:
+        st.info("⏳ En attente de validation par l'administrateur...")
+        if st.button("🔄 Vérifier si mon compte est approuvé"):
+            st.rerun()
+
+    # Disable the normal chat input while login is required
+    user_input = None
+
+else:
+    user_input = st.chat_input("Ask Aria anything...")
 
 # --- Gestion des entrées ---
 input_to_process = None
@@ -465,7 +705,7 @@ if input_to_process:
         response = requests.post(
             f"{BACKEND_URL}/chat",
             json={
-                "customer_id": customer_id,
+                "customer_id": st.session_state.customer_id,
                 "message": input_to_process,
                 "conversation_history": history_for_backend
             },
@@ -476,10 +716,22 @@ if input_to_process:
         
         final_response = data.get("final_response", "Désolé, une erreur est survenue.")
         needs_escalation = data.get("needs_escalation", False)
-        
-        # === LOGIQUE DEMANDÉE ===
-        if needs_escalation:
-            display_message = "Nous sommes désolés de ne pas pouvoir résoudre votre demande immédiatement.Un conseiller humain va vous contacter très bientôt par téléphone ou email."
+        action_triggered = bool(data.get("action_result")) or data.get("action") == "action_agent"
+
+        login_required_by_backend = data.get("login_required", False)
+
+        if login_required_by_backend and not st.session_state.logged_in:
+            st.session_state.force_login_required = True
+            st.session_state.pending_request = input_to_process
+            display_message = (
+                "Pour accéder à cette information, merci de vous connecter. "
+                "Vos données sont sécurisées 🔐"
+            )
+        elif needs_escalation and st.session_state.logged_in:
+            display_message = (
+                "Nous sommes désolés, un conseiller humain va vous contacter "
+                "très bientôt par téléphone ou email."
+            )
         else:
             display_message = final_response
         
@@ -496,31 +748,30 @@ if input_to_process:
     except Exception as e:
         st.error(f"Erreur lors du traitement: {str(e)}")
 
-# --- Suggestions d'actions (Chips) ---
-order_ids = {
-    "CUST001": "ORD5001",
-    "CUST002": "ORD5002",
-    "CUST003": "ORD5003"
-}
-order_id = order_ids.get(customer_id, "ORD5001")
 
+# --- Suggestions d'actions (Chips) ---
 st.markdown('<div class="chips-outer-container st-key-chips">', unsafe_allow_html=True)
-col1, col2, col3 = st.columns([1, 1.3, 1])
+col1, col2, col3 = st.columns(3)
 
 with col1:
-    if st.button("📦 Track order", key="chip_track"):
-        st.session_state.temp_input = f"Où en est ma commande {order_id} ?"
+    if st.button("📦 Ma commande", key="chip_track"):
+        # Action intent → demande de login si anonyme
+        st.session_state.temp_input = "Où en est ma commande ?"
         st.rerun()
-with col2:
-    if st.button("🎧 Recommend headphones", key="chip_rec"):
-        st.session_state.temp_input = "Le routeur X3 est-il compatible avec la fibre ?"
-        st.rerun()
-with col3:
-    if st.button("↩ Return policy", key="chip_return"):
-        st.session_state.temp_input = "Combien de temps ai-je pour retourner un produit ?"
-        st.rerun()
-st.markdown('</div>', unsafe_allow_html=True)
 
+with col2:
+    if st.button("📋 Politique de retour", key="chip_return"):
+        # RAG intent → réponse directe depuis la FAQ
+        st.session_state.temp_input = "Quelle est la politique de retour ?"
+        st.rerun()
+
+with col3:
+    if st.button("💻 Garantie produit", key="chip_warranty"):
+        # RAG intent → réponse directe
+        st.session_state.temp_input = "Quelle est la durée de garantie ?"
+        st.rerun()
+
+st.markdown('</div>', unsafe_allow_html=True)
 # Texte informatif de bas de page
 st.markdown('<div class="disclaimer-text">Aria can make mistakes. Please check important info.</div>', unsafe_allow_html=True)
 

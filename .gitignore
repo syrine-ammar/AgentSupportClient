@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 chroma_data/
+data/
 # Logs
 notifications.log
 *.log

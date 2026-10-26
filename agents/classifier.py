@@ -25,15 +25,15 @@ Définitions des intentions :
 
 - order_status : demande concernant l'état d'une commande, son avancement, la livraison ou le suivi d'un colis.
 
-- return_refund : demande concernant un retour de produit, un remboursement, une annulation de commande ou les conditions de retour.
+- return_refund : le client veut effectuer un retour, un remboursement ou une annulation de commande (ex: "je veux retourner mon produit", "remboursez-moi", "annulez ma commande").
 
 - product_question : question concernant les caractéristiques d'un produit, son prix, sa disponibilité ou ses informations générales.
 
 - technical_support : problème lié à l'utilisation d'un produit déjà reçu (panne, configuration, installation ou problème technique).
 
-- greeting_smalltalk : messages de politesse, salutations, remerciements.
+- greeting_smalltalk : messages de politesse, salutations, remerciements,etc.
 
-- general_inquiry : questions générales sur l'entreprise, les politiques, etc. (couvertes par la FAQ).
+- general_inquiry : questions générales sur l'entreprise, les **politiques**, la FAQ, les conditions de retour, la garantie, les délais, etc.
 
 - other : tout le reste (demande de parler à un humain, spam, questions hors sujet, blagues...).
 Règle pour la confiance (confidence) :

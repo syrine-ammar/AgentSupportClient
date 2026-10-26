@@ -1,9 +1,3 @@
-"""
-llm_client.py
------------------
- LLM wrapper. Change MODEL and API key in .env to switch provider.
-"""
-
 import os
 import json
 import google.generativeai as genai

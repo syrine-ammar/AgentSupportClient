@@ -11,3 +11,8 @@ requests>=2.32.3
 
 google-generativeai>=0.8.0   # Gemini (gratuit)
 openai>=1.50.0               # OpenAI GPT ou Grok (même SDK)
+pypdf>=4.0.1
+
+groq>=0.9.0
+
+resend>=2.1.0

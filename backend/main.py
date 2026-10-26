@@ -3,17 +3,17 @@ main.py
 -------
 Backend FastAPI pour NovaShop Support
 """
-from aiohttp import request
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 
-from graph.workflow import support_graph
+# Import du workflow ET du classifieur (pour le pré-check)
+from graph.workflow import support_graph, ACTION_INTENTS
+from agents.classifier import classify_message 
 
 app = FastAPI(title="NovaShop Support Agent API")
 
-# Fix connection reset errors + allow Streamlit to connect
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,12 +30,10 @@ class ChatMessage(BaseModel):
     role: str
     content: str
 
-
 class ChatRequest(BaseModel):
     customer_id: str
     message: str
     conversation_history: Optional[List[ChatMessage]] = []
-
 
 class ChatResponse(BaseModel):
     final_response: str
@@ -44,11 +42,10 @@ class ChatResponse(BaseModel):
     status: Optional[str] = None
     needs_escalation: Optional[bool] = False
     escalation_reason: Optional[str] = None
-    
-    # Debug fields
     action_result: Optional[dict] = None
     rag_answer: Optional[str] = None
     action_type: Optional[str] = None
+    login_required: Optional[bool] = False
 
 
 # ============================================================
@@ -62,19 +59,44 @@ def health_check():
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
     try:
+        # --- STEP 1: Pre-check for action intents---
+        # Run only the classifier to see if login is required upfront
+        classifier_state = {"message": request.message, "conversation_history": []}
+        classifier_result = classify_message(classifier_state)
+        intent = classifier_result.get("intent")
+        confidence = classifier_result.get("intent_confidence")
+
+        if request.customer_id == "anonymous" and intent in ACTION_INTENTS:
+            return ChatResponse(
+                final_response="Pour accéder à vos commandes ou remboursements, veuillez vous connecter. 🔐",
+                intent=intent,
+                intent_confidence=confidence,
+                login_required=True,
+                needs_escalation=False,
+                status="pending_login",
+            )
+
+        # --- STEP 2: Run the full graph ---
         initial_state = {
             "customer_id": request.customer_id,
             "message": request.message,
             "conversation_history": [m.dict() for m in (request.conversation_history or [])],
         }
 
-        print(f"→ Processing: {request.message[:80]}...")
-
         result = support_graph.invoke(initial_state)
 
-        print("→ Graph completed successfully")
+        # --- STEP 3: Handle anonymous escalation ---
+        if request.customer_id == "anonymous" and result.get("needs_escalation"):
+            return ChatResponse(
+                final_response="Pour que nous puissions vous aider plus précisément, veuillez vous connecter ou créer un compte.",
+                intent=result.get("intent"),
+                intent_confidence=result.get("intent_confidence"),
+                login_required=True,
+                needs_escalation=False,
+                status="pending_login",
+            )
 
-        # Fallback if final_response is missing
+        # --- STEP 4: Normal response ---
         final_response = result.get("final_response")
         if not final_response:
             if result.get("needs_escalation"):
@@ -92,6 +114,7 @@ def chat(request: ChatRequest):
             action_result=result.get("action_result"),
             rag_answer=result.get("rag_answer"),
             action_type=result.get("action_type"),
+            login_required=False,
         )
 
     except Exception as e:
@@ -109,8 +132,8 @@ def chat(request: ChatRequest):
             final_response=friendly_message,
             needs_escalation=False,
             status="error",
+            login_required=False,
         )
-
 
 if __name__ == "__main__":
     import uvicorn

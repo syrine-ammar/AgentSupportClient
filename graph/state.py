@@ -35,4 +35,4 @@ class SupportState(TypedDict, total=False):
     
     # Final response
     final_response: Optional[str]
-    status: Optional[Literal["processing", "resolved", "escalated"]]
+    status: Optional[Literal["processing", "resolved", "escalated", "pending_login"]]
