@@ -369,6 +369,9 @@ if "pending_request" not in st.session_state:
 if "auth_message" not in st.session_state:
     st.session_state.auth_message = None
 
+if "token" not in st.session_state:
+    st.session_state.token = None 
+
 # --- Sidebar ---
 with st.sidebar:
     st.header("Session client")
@@ -383,6 +386,7 @@ with st.sidebar:
             st.session_state.logged_in = False
             st.session_state.customer_id = "anonymous"
             st.session_state.customer_name = None
+            st.session_state.pop("token", None) 
             st.session_state.force_login_required = False
             st.session_state.auth_message = None
             st.session_state.waiting_for_approval = False
@@ -509,38 +513,49 @@ def get_user_status(email: str):
 
 
 def continue_pending_request():
+    """Reprend la demande en attente une fois l'utilisateur connecté, en envoyant le token JWT."""
     if not st.session_state.pending_request or not st.session_state.logged_in:
         return
 
     history_for_backend = [
         {"role": msg["role"], "content": msg["content"]}
         for msg in st.session_state.messages
-        if msg["role"] != "assistant" or msg["content"] != "Veuillez vous connecter ou créer un compte pour poursuivre."
     ]
 
-    try:
-        response = requests.post(
-            f"{BACKEND_URL}/chat",
-            json={
-                "customer_id": st.session_state.customer_id,
-                "message": st.session_state.pending_request,
-                "conversation_history": history_for_backend
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        final_response = data.get("final_response", "Désolé, une erreur est survenue.")
-        st.session_state.messages.append({"role": "assistant", "content": final_response})
-        st.session_state.last_debug_data = data
-    except Exception as e:
-        st.session_state.messages.append({"role": "assistant", "content": "Erreur lors de la reprise de la conversation après validation : " + str(e)})
+    # --- AJOUT JWT : Préparation des headers avec le token ---
+    headers = {}
+    if "token" in st.session_state:
+        headers["Authorization"] = f"Bearer {st.session_state['token']}"
 
+    try:
+        with st.spinner("Validation en cours, traitement de votre demande..."):
+            response = requests.post(
+                f"{BACKEND_URL}/chat",
+                json={
+                    "customer_id": st.session_state.customer_id,
+                    "message": st.session_state.pending_request,
+                    "conversation_history": history_for_backend
+                },
+                headers=headers #  ENVOI DU TOKEN 
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            final_response = data.get("final_response", "Désolé, une erreur est survenue.")
+            st.session_state.messages.append({"role": "assistant", "content": final_response})
+            st.session_state.last_debug_data = data
+            
+    except Exception as e:
+        st.session_state.messages.append({"role": "assistant", "content": f"⚠️ Erreur lors de la reprise : {str(e)}"})
+
+    # --- NETTOYAGE CRUCIAL pour éviter les boucles ou doubles réponses ---
     st.session_state.pending_request = None
     st.session_state.waiting_for_approval = False
     st.session_state.force_login_required = False
     st.session_state.pending_email = None
     st.session_state.pending_password = None
-
+    
+    st.rerun() # Force l'affichage immédiat de la réponse
 
 if st.session_state.waiting_for_approval and st.session_state.pending_email:
     current_status = get_user_status(st.session_state.pending_email)
@@ -548,9 +563,12 @@ if st.session_state.waiting_for_approval and st.session_state.pending_email:
         login_result = login(st.session_state.pending_email, st.session_state.pending_password)
         if login_result.get("success"):
             st.session_state.logged_in = True
+            st.session_state["token"] = login_result["access_token"]
             st.session_state.customer_id = login_result["customer_id"]
             st.session_state.customer_name = login_result["name"]
             continue_pending_request()
+       
+
 
 
 # --- Force Login / Signup Form ---
@@ -596,18 +614,21 @@ if st.session_state.force_login_required and not st.session_state.logged_in:
                     st.session_state.logged_in = True
                     st.session_state.customer_id = result["customer_id"]
                     st.session_state.customer_name = result["name"]
+                    st.session_state.token = result.get("access_token") 
+                    
                     st.session_state.force_login_required = False
                     st.session_state.auth_message = "Connecté avec succès !"
+                    
                     if st.session_state.pending_request:
                         continue_pending_request()
-                    st.rerun()
+                    else:
+                        st.rerun()
                 else:
                     st.error(result.get("message", "Erreur de connexion"))
                     if "attente" in (result.get("message") or "").lower():
                         st.session_state.waiting_for_approval = True
                         st.session_state.pending_email = auth_identifier.strip()
                         st.session_state.pending_password = auth_password
-
     else:  # Créer un compte
         with st.form("signup_form_inline", clear_on_submit=False):
             st.subheader("Créer un compte")
@@ -702,6 +723,14 @@ if input_to_process:
             for msg in st.session_state.messages[:-1]
         ]
 
+        # --- JWT Préparation des headers avec le token ---
+        headers = {}
+        if "token" in st.session_state:
+            headers["Authorization"] = f"Bearer {st.session_state['token']}"
+            print(f"🔑 Token envoyé: {headers['Authorization'][:20]}...")  
+        else:
+            print("👤 Mode anonyme - pas de token")  #pour visualiser dans terminal
+
         response = requests.post(
             f"{BACKEND_URL}/chat",
             json={
@@ -709,6 +738,7 @@ if input_to_process:
                 "message": input_to_process,
                 "conversation_history": history_for_backend
             },
+            headers=headers,  # Envoi du token JWT
             #timeout=45,
         )
         response.raise_for_status()
@@ -725,7 +755,7 @@ if input_to_process:
             st.session_state.pending_request = input_to_process
             display_message = (
                 "Pour accéder à cette information, merci de vous connecter. "
-                "Vos données sont sécurisées 🔐"
+                "Vos données sont sécurisées "
             )
         elif needs_escalation and st.session_state.logged_in:
             display_message = (
@@ -744,7 +774,7 @@ if input_to_process:
         st.error("⚠️ Le backend a mis trop de temps à répondre. Veuillez réessayer.")
         
     except requests.exceptions.ConnectionError:
-        st.error("⚠️ Impossible de contacter le backend. Vérifie qu'il tourne sur le port 8000.")
+        st.error("⚠️ Impossible de contacter le backend. Vérifiez qu'il tourne sur le port 8000.")
     except Exception as e:
         st.error(f"Erreur lors du traitement: {str(e)}")
 

@@ -3,7 +3,7 @@ main.py
 -------
 Backend FastAPI pour NovaShop Support
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -11,6 +11,8 @@ from typing import Optional, List
 # Import du workflow ET du classifieur (pour le pré-check)
 from graph.workflow import support_graph, ACTION_INTENTS
 from agents.classifier import classify_message 
+
+from backend.services.security import decode_token
 
 app = FastAPI(title="NovaShop Support Agent API")
 
@@ -49,6 +51,28 @@ class ChatResponse(BaseModel):
 
 
 # ============================================================
+# DÉPENDANCE DE SÉCURITÉ (JWT)
+# ============================================================
+
+def get_current_user_optional(authorization: Optional[str] = Header(None)):
+    """
+    Extrait et valide le token JWT de manière optionnelle.
+    Retourne le payload (ex: {"sub": "email", "customer_id": "CUST123"}) 
+    ou None si pas de token ou token invalide (mode anonyme).
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    
+    token = authorization.split(" ")[1]
+    payload = decode_token(token)
+    
+    if not payload:
+        return None # Token invalide ou expiré -> traité comme anonyme
+    
+    return payload
+
+
+# ============================================================
 # ROUTES
 # ============================================================
 
@@ -57,16 +81,19 @@ def health_check():
     return {"status": "ok", "service": "NovaShop Support Agent API"}
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, current_user: dict = Depends(get_current_user_optional)):
     try:
-        # --- STEP 1: Pre-check for action intents---
-        # Run only the classifier to see if login is required upfront
+        # ---JWT : Déterminer l'identité réelle ---
+        effective_customer_id = current_user["customer_id"] if current_user else request.customer_id
+
+        # --- STEP 1: Pre-check for action intents ---
         classifier_state = {"message": request.message, "conversation_history": []}
         classifier_result = classify_message(classifier_state)
         intent = classifier_result.get("intent")
         confidence = classifier_result.get("intent_confidence")
 
-        if request.customer_id == "anonymous" and intent in ACTION_INTENTS:
+        # Utiliser effective_customer_id au lieu de request.customer_id
+        if effective_customer_id == "anonymous" and intent in ACTION_INTENTS:
             return ChatResponse(
                 final_response="Pour accéder à vos commandes ou remboursements, veuillez vous connecter. 🔐",
                 intent=intent,
@@ -78,7 +105,7 @@ def chat(request: ChatRequest):
 
         # --- STEP 2: Run the full graph ---
         initial_state = {
-            "customer_id": request.customer_id,
+            "customer_id": effective_customer_id, # --- MODIFICATION JWT ---
             "message": request.message,
             "conversation_history": [m.dict() for m in (request.conversation_history or [])],
         }
@@ -86,7 +113,8 @@ def chat(request: ChatRequest):
         result = support_graph.invoke(initial_state)
 
         # --- STEP 3: Handle anonymous escalation ---
-        if request.customer_id == "anonymous" and result.get("needs_escalation"):
+
+        if effective_customer_id == "anonymous" and result.get("needs_escalation"):
             return ChatResponse(
                 final_response="Pour que nous puissions vous aider plus précisément, veuillez vous connecter ou créer un compte.",
                 intent=result.get("intent"),
@@ -134,6 +162,69 @@ def chat(request: ChatRequest):
             status="error",
             login_required=False,
         )
+
+
+    ##################### testing sign up and login endpoints
+from backend.services.security import hash_password, create_access_token, decode_token
+from backend.services.auth_utils import signup as auth_signup, login as auth_login, load_users
+
+# ============================================================
+# SCHEMAS POUR L'AUTHENTIFICATION
+# ============================================================
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    name: str
+    phone: Optional[str] = None
+
+class LoginRequest(BaseModel):
+    identifier: str # Email ou téléphone
+    password: str
+
+class AuthResponse(BaseModel):
+    success: bool
+    message: str
+    access_token: Optional[str] = None
+    customer_id: Optional[str] = None
+    name: Optional[str] = None
+
+# ============================================================
+# ROUTES D'AUTHENTIFICATION
+# ============================================================
+
+@app.post("/signup", response_model=AuthResponse)
+def api_signup(request: SignupRequest):
+    """Inscription d'un nouvel utilisateur."""
+    result = auth_signup(request.email, request.password, request.name, request.phone)
+    return AuthResponse(
+        success=result.get("success", False),
+        message=result.get("message", ""),
+    )
+
+@app.post("/login", response_model=AuthResponse)
+def api_login(request: LoginRequest):
+    """Connexion et génération du token JWT."""
+    result = auth_login(request.identifier, request.password)
+    
+    if not result.get("success"):
+        return AuthResponse(success=False, message=result.get("message", "Échec de connexion"))
+
+    # Génération du JWT si le login est réussi
+    token = create_access_token(data={
+        "sub": request.identifier, 
+        "customer_id": result["customer_id"]
+    })
+
+    return AuthResponse(
+        success=True,
+        message="Connexion réussie",
+        access_token=token,
+        customer_id=result["customer_id"],
+        name=result["name"]
+    )
+
+
 
 if __name__ == "__main__":
     import uvicorn

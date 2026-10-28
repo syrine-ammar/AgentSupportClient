@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from database_mock import create_fake_orders_for_customer
 from backend.services.email_service import send_approval_email 
+from backend.services.security import hash_password, verify_password, create_access_token # <-- AJOUTER
 
 
 USERS_FILE = Path("data/users.json")
@@ -33,11 +34,12 @@ def signup(email: str, password: str, name: str, phone: str = None) -> dict:
         "name": name,
         "email": email,
         "phone": phone_value,
-        "password": password,
+        "password": hash_password(password),
         "status": "pending",
         "loyalty_tier": "bronze",
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
+
 
     save_users(users)
     return {
@@ -51,16 +53,18 @@ def login(identifier: str, password: str) -> dict:
     if not user:
         user = next((u for u in users.values() if u.get("phone") == identifier), None)
 
-    if not user or user["password"] != password:
+    if not user or not verify_password(password, user["password"]):
         return {"success": False, "message": "Email, téléphone ou mot de passe incorrect"}
 
     if user.get("status") != "approved":
         return {"success": False, "message": "Votre compte est en attente de validation."}
-
+    access_token = create_access_token(data={"sub": user["email"], "customer_id": user["customer_id"]})
     return {
         "success": True,
         "customer_id": user["customer_id"],
-        "name": user["name"]
+        "name": user["name"],
+        "access_token": access_token,
+        "token_type": "bearer"
     }
 
 def approve_user(email: str, phone: str = None) -> dict:
