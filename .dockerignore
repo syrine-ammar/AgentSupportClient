@@ -1,0 +1,27 @@
+
+# Environnement Python local
+venv/
+.venv/
+
+# Cache Python
+__pycache__/
+*.py[cod]
+
+# Git et éditeurs
+.git/
+.vscode/
+
+# Variables d'environnement secrètes
+.env
+.env.*
+!.env.example
+
+# Logs et caches de tests
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Données persistantes : ne pas incorporer dans l'image
+data/
+chroma_data/

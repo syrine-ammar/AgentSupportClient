@@ -20,70 +20,7 @@ DATA_DIR.mkdir(exist_ok=True)
 # ============================================================
 # FAKE DATA
 # ============================================================
-"""
-CUSTOMERS = {
-    "CUST001": {
-        "customer_id": "CUST001",
-        "name": "Sarah Ben Ali",
-        "email": "sarah.benali@email.com",
-        "phone": "+216 98 123 456",
-        "loyalty_tier": "gold",
-        "since": "2022-03-15",
-    },
-    "CUST002": {
-        "customer_id": "CUST002",
-        "name": "Karim Trabelsi",
-        "email": "karim.trabelsi@email.com",
-        "phone": "+216 99 234 567",
-        "loyalty_tier": "silver",
-        "since": "2023-07-01",
-    },
-    "CUST003": {
-        "customer_id": "CUST003",
-        "name": "Lina Mansour",
-        "email": "lina.mansour@email.com",
-        "phone": "+216 97 345 678",
-        "loyalty_tier": "bronze",
-        "since": "2024-01-10",
-    },
-}
 
-
-
-ORDERS = {
-    "ORD5001": {
-        "order_id": "ORD5001",
-        "customer_id": "CUST001",
-        "products": ["PROD100"],
-        "status": "shipped",
-        "order_date": "2026-06-10",
-        "delivery_date": "2026-06-18",
-        "total": 1299.0,
-        "tracking_number": "TM-994821-FR",
-    },
-    "ORD5002": {
-        "order_id": "ORD5002",
-        "customer_id": "CUST002",
-        "products": ["PROD101"],
-        "status": "delivered",
-        "order_date": "2026-05-28",
-        "delivery_date": "2026-06-02",
-        "total": 89.0,
-        "tracking_number": "TM-994822-FR",
-    },
-    "ORD5003": {
-        "order_id": "ORD5003",
-        "customer_id": "CUST003",
-        "products": ["PROD102", "PROD101"],
-        "status": "processing",
-        "order_date": "2026-06-22",
-        "delivery_date": None,
-        "total": 148.0,
-        "tracking_number": None,
-    },
-}
-
-"""
 PRODUCTS = {
     "PROD100": {
         "product_id": "PROD100",
